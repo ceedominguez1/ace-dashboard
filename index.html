@@ -282,6 +282,24 @@ const initials=(s)=>(s||"?").split(/[ @.,]/).filter(Boolean).slice(0,2).map(x=>x
 // 0 Quote,1 Name,2 Email,3 Phone,4 Title,5 Link,6 Total,7 Status,8 WixStatus,
 // 9 Invoice#,10 InvoiceStatus,11 PaidDate,12 EmberDate,13 EmberType,14 ReportSubmitted,
 // 15 Invoice,16 Notes,17 RetestReportStatus,18 RetestInvoice,19 JobStatus
+// Detect the fire-protection system(s) from the quote/work-order title text.
+function detectSystem(title){
+  const t=(title||"").toLowerCase(); const out=[]; const add=s=>{ if(!out.includes(s)) out.push(s); };
+  if(/sprinkler|title\s*19|\bt-?19\b|\bafs\b|tamper|\bpiv\b/.test(t))  add("Fire Sprinkler");
+  if(/fire alarm|supervis|annunciat|\bmonitor|central station|\bhorn|strobe|notification device/.test(t)) add("Fire Alarm");
+  if(/standpipe|\bprv\b|pressure reducing/.test(t))                   add("Standpipe");
+  if(/fire pump|churn|\bpump\b/.test(t))                              add("Fire Pump");
+  if(/backflow/.test(t))                                              add("Backflow");
+  if(/emergency light|emergency &|emergency exit|exit sign|\begress\b/.test(t)) add("Emergency Lighting");
+  if(/extinguisher/.test(t))                                          add("Fire Extinguisher");
+  if(/\bhood\b|ansul|kitchen|suppression|clean agent/.test(t))        add("Kitchen / Suppression");
+  if(/hydrant/.test(t))                                               add("Hydrant");
+  if(/fire escape/.test(t))                                           add("Fire Escape");
+  if(/elevator/.test(t))                                              add("Elevator");
+  if(/generator/.test(t))                                             add("Generator");
+  if(/reg[\s-]?4/.test(t))                                            add("Reg 4");
+  return out.join(" · ");
+}
 function mapRow(r,rowNum){
   const g=(i)=> (i<r.length && r[i]!=null) ? String(r[i]).trim() : "";
   const name=g(1);
@@ -292,10 +310,11 @@ function mapRow(r,rowNum){
   const ai=title.toLowerCase().indexOf(" at ");
   const service = ai>=0 ? title.slice(0,ai).trim() : title;
   const site    = ai>=0 ? title.slice(ai+4).trim() : "";
+  const system  = detectSystem(title) || service;   // clean system label from the title
   return {
     _row:rowNum,
     quote:g(0).replace(/[,\s]/g,""), name, client, contact,
-    email:g(2), phone:g(3), title, link:g(5),
+    email:g(2), phone:g(3), title, link:g(5), service, site, system,
     amount:g(6), status:g(7), wix:g(8),
     invNum:g(9), invStatus:g(10), paidDate:g(11),
     emberDate:g(12), emberType:g(13), reportSub:g(14),
@@ -458,7 +477,7 @@ function renderViews(){
 function rows(){
   const v=VIEWS.find(x=>x.key===activeView)||VIEWS[0];
   let list=jobs.filter(v.test);
-  if(search){const q=search.toLowerCase();list=list.filter(j=>[j.client,j.contact,j.site,j.quote,j.invNum,j.service,j.email].some(x=>(x||"").toLowerCase().includes(q)));}
+  if(search){const q=search.toLowerCase();list=list.filter(j=>[j.client,j.contact,j.site,j.quote,j.invNum,j.service,j.system,j.email].some(x=>(x||"").toLowerCase().includes(q)));}
   const order={red:0,brass:1,blue:2,gray:3,green:4};
   list.sort((a,b)=>(order[nextAction(a).k]??9)-(order[nextAction(b).k]??9));
   return list;
@@ -479,7 +498,7 @@ function renderQueue(){
     return `<tr data-q="${esc(j.quote)}">
       <td><div class="na"><span class="na-act ${na.k}"><span class="nd"></span>${esc(na.a)}</span>
         <span class="na-sub"><b>${esc(j.client||"—")}</b>${sitebits?(" · "+esc(sitebits)):""}</span></div></td>
-      <td><span class="svc"><span class="ic"></span>${esc(j.service||"—")}</span></td>
+      <td><span class="svc"><span class="ic"></span>${esc(j.system||j.service||"—")}</span></td>
       <td><span class="pill ${stagePill(j)}"><span class="pd"></span>${esc(stageOf(j))}</span></td>
       <td>${invPill(j)}${j.invNum?` <span class="na-sub">#${esc(j.invNum)}</span>`:""}</td>
       <td>${reportPill(j)}</td>
@@ -497,7 +516,7 @@ function renderBoard(){
     return `<div class="col"><div class="col-h">${stage}<span class="ct">${items.length}</span></div>
       <div class="col-b">${items.map(j=>{const na=nextAction(j);
         return `<div class="task" data-q="${esc(j.quote)}"><div class="tt">${esc(j.client||"—")}</div>
-          <div class="tc">${esc(j.service||"")} · #${esc(j.quote)}</div>
+          <div class="tc">${esc(j.system||j.service||"")} · #${esc(j.quote)}</div>
           <div class="tm"><span style="font-size:11px">${reportTag(j)}</span><span class="na-act ${na.k}" style="font-size:11px"><span class="nd"></span>${esc(na.a)}</span></div></div>`;
       }).join("")||`<div class="tc" style="padding:6px 4px">—</div>`}</div></div>`;
   }).join("");
@@ -529,6 +548,7 @@ function openDrawer(q){
     </div>
     <div class="dsec"><div class="lbl">Job detail</div>
       <div class="kv">
+        <span class="k">System</span><span class="v">${esc(j.system||"—")}</span>
         <span class="k">Quote #</span><span class="v">#${esc(j.quote)}</span>
         <span class="k">Invoice</span><span class="v">${j.invNum?("#"+esc(j.invNum)+" · "):""}${esc(j.invStatus||"not invoiced")}</span>
         <span class="k">Status</span><span class="v">${esc(j.status||"—")}</span>
