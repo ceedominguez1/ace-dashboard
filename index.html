@@ -447,7 +447,7 @@ async function gPut(range, value){
 async function markReportSent(j, sent){
   const col=colA1(reportSentCol);
   if(sent && !reportSentExists){ await gPut(resolvedTab+"!"+col+"1","Report Sent"); reportSentExists=true; }  // create header once
-  const val=sent ? ("Sent "+todayStr()+" · "+(user.email||"")) : "";
+  const val=sent ? ("Sent "+todayStr()+" · "+(user.firstName||user.email||"")) : "";
   await gPut(resolvedTab+"!"+col+j._row, val);
   j.reportSent=val;
 }
@@ -605,7 +605,8 @@ function initGoogle(){
       token=resp.access_token;
       try{
         const info=await(await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:"Bearer "+token}})).json();
-        setUser({name:info.name||info.email,email:info.email});
+        const firstName=info.given_name||String(info.name||"").trim().split(/\s+/)[0]||String(info.email||"").split("@")[0];
+        setUser({name:info.name||info.email,email:info.email,firstName});
         await loadLive(); hideGate(); render(); toast("Loaded · "+jobs.length+" jobs");
       }catch(e){ showGate("Couldn't load the sheet:\n"+(e.message||e)+"\n\nMake sure your account has access to the \"Wix quotes\" sheet."); console.error(e); }
     }
