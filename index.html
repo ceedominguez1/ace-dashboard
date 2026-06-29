@@ -221,7 +221,7 @@ const CONFIG = {
     <span class="lead"><span class="dot"></span>Needs attention</span>
     <span class="alert-item red"><b id="aOutstanding">0</b><span class="lbl">invoices outstanding</span></span>
     <span class="alert-item red"><b id="aOverdue">0</b><span class="lbl">overdue</span></span>
-    <span class="alert-item brass"><b id="aSchedule">0</b><span class="lbl">to schedule</span></span>
+    <span class="alert-item brass"><b id="aReports">0</b><span class="lbl">reports to send</span></span>
   </div>
 
   <div class="gauges" id="gauges"></div>
@@ -248,7 +248,7 @@ const CONFIG = {
           <th>System</th>
           <th>Stage</th>
           <th>Invoice</th>
-          <th>Amount</th>
+          <th>Report to client</th>
           <th></th>
         </tr></thead>
         <tbody id="queueBody"></tbody>
@@ -315,6 +315,21 @@ function isOverdue(j){ const i=inv(j); return i==="overdue"||i==="partialandover
 function notInvoiced(j){ return inv(j)===""; }
 function retestActive(j){ const r=(j.retest||"").toLowerCase(); return r && !/not needed|does not apply|not applicable|completed/.test(r); }
 
+/* report-to-client tracking (read-only, inferred from existing columns) */
+function reportSentClient(j){ const s=(j.jobStatus||"").toLowerCase(); return /report/.test(s) && /(client|custom)/.test(s); }
+function workDone(j){ const s=stageOf(j); return s==="Completed"||s==="Invoiced"||s==="Paid"; }
+function reportDue(j){ return workDone(j) && !reportSentClient(j); }   // a report is owed to the client
+function reportKey(j){ if(reportSentClient(j))return "sent"; if(reportDone(j))return "ready"; return workDone(j)?"due":"na"; }
+function reportPill(j){
+  const k=reportKey(j);
+  if(k==="sent")  return `<span class="pill green"><span class="pd"></span>Sent to client</span>`;
+  if(k==="ready") return `<span class="pill brass"><span class="pd pulse"></span>Ready to send</span>`;
+  if(k==="due")   return `<span class="pill gray"><span class="pd"></span>Not sent</span>`;
+  return `<span class="pill gray"><span class="pd"></span>—</span>`;
+}
+function reportText(j){ const k=reportKey(j); return k==="sent"?"Sent to client":k==="ready"?"Report ready — not sent":k==="due"?"Not sent yet":"—"; }
+function reportTag(j){ const k=reportKey(j); return k==="sent"?'<span style="color:var(--green)">✓ report sent</span>':k==="ready"?'<span style="color:var(--brass)">report ready</span>':""; }
+
 function nextAction(j){
   const i=inv(j), s=st(j), r=(j.retest||"").toLowerCase();
   if(i==="paid")  return {a:"Paid · close out", k:"green"};
@@ -345,6 +360,7 @@ const VIEWS=[
   {key:"needs",   label:"Needs action", test:j=>!isClosed(j)},
   {key:"overdue", label:"Overdue invoices", test:j=>isOverdue(j)},
   {key:"awaiting",label:"Awaiting payment", test:j=>inv(j)==="sent"},
+  {key:"reportdue",label:"Report due to client", test:reportDue},
   {key:"invoice", label:"Ready to invoice", test:j=>st(j)==="completed" && notInvoiced(j)},
   {key:"schedule",label:"To schedule", test:j=>(st(j)==="unconfirmed"||st(j)==="missed"||st(j)==="") && notInvoiced(j) && (j.wix||"").toLowerCase()!=="deleted"},
   {key:"progress",label:"In progress", test:j=>st(j)==="confirmed"||st(j)==="in progress"},
@@ -357,7 +373,7 @@ const VIEWS=[
 function kpis(){
   return [
     {cls:"red", label:"Overdue invoices", sub:"sent, past due — chase", n:jobs.filter(isOverdue).length, view:"overdue"},
-    {cls:"brass",label:"Awaiting payment", sub:"invoice sent, not overdue", n:jobs.filter(j=>inv(j)==="sent").length, view:"awaiting"},
+    {cls:"brass",label:"Reports to send", sub:"work done, not sent to client", n:jobs.filter(reportDue).length, view:"reportdue"},
     {cls:"blue",label:"Ready to invoice", sub:"work done, not invoiced", n:jobs.filter(j=>st(j)==="completed"&&notInvoiced(j)).length, view:"invoice"},
     {cls:"brass",label:"To schedule", sub:"unconfirmed / missed", n:jobs.filter(j=>(st(j)==="unconfirmed"||st(j)==="missed"||st(j)==="")&&notInvoiced(j)&&(j.wix||"").toLowerCase()!=="deleted").length, view:"schedule"}
   ];
@@ -403,8 +419,8 @@ function renderGauges(){
   $("gauges").querySelectorAll(".gauge").forEach(g=>g.onclick=()=>setView(g.dataset.view));
   const outstanding=jobs.filter(isOutstanding).length;
   const overdue=jobs.filter(isOverdue).length;
-  const sched=jobs.filter(j=>(st(j)==="unconfirmed"||st(j)==="missed"||st(j)==="")&&notInvoiced(j)&&(j.wix||"").toLowerCase()!=="deleted").length;
-  $("aOutstanding").textContent=outstanding; $("aOverdue").textContent=overdue; $("aSchedule").textContent=sched;
+  const reportsToSend=jobs.filter(reportDue).length;
+  $("aOutstanding").textContent=outstanding; $("aOverdue").textContent=overdue; $("aReports").textContent=reportsToSend;
   const strip=$("alertStrip"), clear=(outstanding+overdue===0);
   strip.classList.toggle("clear",clear);
   strip.querySelector(".lead").lastChild.textContent=clear?"All clear":"Needs attention";
@@ -443,7 +459,7 @@ function renderQueue(){
       <td><span class="svc"><span class="ic"></span>${esc(j.service||"—")}</span></td>
       <td><span class="pill ${stagePill(j)}"><span class="pd"></span>${esc(stageOf(j))}</span></td>
       <td>${invPill(j)}${j.invNum?` <span class="na-sub">#${esc(j.invNum)}</span>`:""}</td>
-      <td class="amt">${fmtAmount(j.amount)}</td>
+      <td>${reportPill(j)}</td>
       <td><div class="rowact"><button class="btn btn-light btn-sm" data-open="${esc(j.quote)}">Open</button></div></td>
     </tr>`;
   }).join("");
@@ -459,7 +475,7 @@ function renderBoard(){
       <div class="col-b">${items.map(j=>{const na=nextAction(j);
         return `<div class="task" data-q="${esc(j.quote)}"><div class="tt">${esc(j.client||"—")}</div>
           <div class="tc">${esc(j.service||"")} · #${esc(j.quote)}</div>
-          <div class="tm"><span class="amt">${fmtAmount(j.amount)}</span><span class="na-act ${na.k}" style="font-size:11px"><span class="nd"></span>${esc(na.a)}</span></div></div>`;
+          <div class="tm"><span style="font-size:11px">${reportTag(j)}</span><span class="na-act ${na.k}" style="font-size:11px"><span class="nd"></span>${esc(na.a)}</span></div></div>`;
       }).join("")||`<div class="tc" style="padding:6px 4px">—</div>`}</div></div>`;
   }).join("");
   board.querySelectorAll(".task").forEach(t=>t.onclick=()=>openDrawer(t.dataset.q));
@@ -486,10 +502,10 @@ function openDrawer(q){
       <div class="kv">
         <span class="k">Quote #</span><span class="v">#${esc(j.quote)}</span>
         <span class="k">Invoice</span><span class="v">${j.invNum?("#"+esc(j.invNum)+" · "):""}${esc(j.invStatus||"not invoiced")}</span>
-        <span class="k">Amount</span><span class="v">${fmtAmount(j.amount)}</span>
         <span class="k">Status</span><span class="v">${esc(j.status||"—")}</span>
         <span class="k">Wix status</span><span class="v">${esc(j.wix||"—")}</span>
         <span class="k">Stage</span><span class="v">${esc(stageOf(j))}</span>
+        <span class="k">Report to client</span><span class="v">${esc(reportText(j))}</span>
         ${j.reportSub?`<span class="k">Report</span><span class="v">${esc(j.reportSub)}</span>`:""}
         ${j.emberDate||j.emberType?`<span class="k">Ember</span><span class="v">${esc([j.emberType,j.emberDate].filter(Boolean).join(" · "))}</span>`:""}
         ${j.retest?`<span class="k">Retest</span><span class="v">${esc(j.retest)}${j.retestInv?(" · inv "+esc(j.retestInv)):""}</span>`:""}
