@@ -207,7 +207,7 @@ const CONFIG = {
       </div>
     </div>
     <div class="topbar-spacer"></div>
-    <span class="roflag" title="v1 displays only; it never writes to your sheet">Read-only</span>
+    <span class="roflag" title="Reads your sheet; the only thing it ever writes is the Report Sent status">Live</span>
     <button class="btn btn-ghost btn-sm" id="refreshBtn" style="margin-left:4px">Refresh</button>
     <div class="user" id="userBox" style="display:none">
       <div class="user-meta"><span class="n" id="uName">—</span><span class="e" id="uEmail">—</span></div>
@@ -271,6 +271,7 @@ let token=null;
 let user={name:"",email:""};
 let jobs=[];
 let resolvedTab=CONFIG.ACCEPTED_TAB;
+let reportSentCol=-1, reportSentExists=false;   // resolved at load; the only column the app writes
 let activeView="needs", search="", mainView="queue";
 
 const $=(id)=>document.getElementById(id);
@@ -316,7 +317,7 @@ function notInvoiced(j){ return inv(j)===""; }
 function retestActive(j){ const r=(j.retest||"").toLowerCase(); return r && !/not needed|does not apply|not applicable|completed/.test(r); }
 
 /* report-to-client tracking (read-only, inferred from existing columns) */
-function reportSentClient(j){ const s=(j.jobStatus||"").toLowerCase(); return /report/.test(s) && /(client|custom)/.test(s); }
+function reportSentClient(j){ if(j.reportSent) return true; const s=(j.jobStatus||"").toLowerCase(); return /report/.test(s) && /(client|custom)/.test(s); }
 function workDone(j){ const s=stageOf(j); return s==="Completed"||s==="Invoiced"||s==="Paid"; }
 function reportDue(j){ return workDone(j) && !reportSentClient(j); }   // a report is owed to the client
 function reportKey(j){ if(reportSentClient(j))return "sent"; if(reportDone(j))return "ready"; return workDone(j)?"due":"na"; }
@@ -397,17 +398,39 @@ async function resolveTabName(){
 }
 async function loadLive(){
   await resolveTabName();
-  const res=await gGet(API+"/values/"+encodeURIComponent(resolvedTab+"!A1:U")+"?majorDimension=ROWS");
+  const res=await gGet(API+"/values/"+encodeURIComponent(resolvedTab+"!A1:AB")+"?majorDimension=ROWS");
   const values=res.values||[];
+  const header=values[0]||[];
+  reportSentCol=header.findIndex(h=>String(h||"").trim().toLowerCase()==="report sent");
+  reportSentExists=reportSentCol>=0;
+  if(!reportSentExists) reportSentCol=Math.max(header.length,21);  // first free column, never inside A:U
   const out=[];
   for(let i=1;i<values.length;i++){               // skip header row
     const row=values[i]||[];
     if(!row.length) continue;
     const j=mapRow(row,i+1);
+    j.reportSent=(reportSentExists && row[reportSentCol]!=null)?String(row[reportSentCol]).trim():"";
     if(!j.quote && !j.name) continue;              // skip blank rows
     out.push(j);
   }
   jobs=out;
+}
+/* --- the ONLY writes the app makes: the Report Sent column --- */
+function colA1(i){ let s=""; i+=1; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+async function gPut(range, value){
+  const r=await fetch(API+"/values/"+encodeURIComponent(range)+"?valueInputOption=USER_ENTERED",
+    {method:"PUT", headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"}, body:JSON.stringify({values:[[value]]})});
+  if(r.status===401){ token=null; showGate("Session expired. Sign in again."); throw new Error("401"); }
+  if(!r.ok) throw new Error("Write "+r.status+": "+(await r.text()));
+  return r.json();
+}
+async function markReportSent(j, sent){
+  const col=colA1(reportSentCol);
+  if(sent && !reportSentExists){ await gPut(resolvedTab+"!"+col+"1","Report Sent"); reportSentExists=true; }  // create header once
+  const val=sent ? ("Sent "+todayStr()+" · "+(user.email||"")) : "";
+  await gPut(resolvedTab+"!"+col+j._row, val);
+  j.reportSent=val;
 }
 
 /* ======================= RENDER ======================= */
@@ -481,7 +504,7 @@ function renderBoard(){
   board.querySelectorAll(".task").forEach(t=>t.onclick=()=>openDrawer(t.dataset.q));
 }
 function openDrawer(q){
-  const j=jobs.find(x=>x.quote===q); if(!j)return; const na=nextAction(j);
+  const j=jobs.find(x=>x.quote===q); if(!j)return; const na=nextAction(j); const repk=reportKey(j);
   $("drawerBody").innerHTML=`
     <div class="drawer-h">
       <div><h3>${esc(j.client||"—")}</h3><div class="sub">${esc(j.service||"")}${j.site?(" · "+esc(j.site)):""}</div></div>
@@ -489,7 +512,13 @@ function openDrawer(q){
     </div>
     <div class="dsec"><div class="lbl">Next action</div>
       <div class="nextbox"><span class="na-act ${na.k}"><span class="nd"></span>${esc(na.a)}</span></div>
-      <div class="ro-note">Read-only view — update the job in the Google Sheet.</div>
+    </div>
+    <div class="dsec"><div class="lbl">Report to client</div>
+      <div class="nextbox" style="justify-content:space-between">
+        <span class="na-act ${repk==='sent'?'green':repk==='ready'?'brass':'gray'}"><span class="nd"></span>${esc(reportText(j))}</span>
+        <button class="btn ${j.reportSent?'btn-light':'btn-dark'} btn-sm" id="dRep">${j.reportSent?'Unmark':'Mark sent ✓'}</button>
+      </div>
+      ${j.reportSent?`<div class="ro-note">${esc(j.reportSent)}</div>`:'<div class="ro-note">Tap to record that the report went to the client.</div>'}
     </div>
     <div class="dsec"><div class="lbl">Contact</div>
       <div class="contactrow">
@@ -505,7 +534,6 @@ function openDrawer(q){
         <span class="k">Status</span><span class="v">${esc(j.status||"—")}</span>
         <span class="k">Wix status</span><span class="v">${esc(j.wix||"—")}</span>
         <span class="k">Stage</span><span class="v">${esc(stageOf(j))}</span>
-        <span class="k">Report to client</span><span class="v">${esc(reportText(j))}</span>
         ${j.reportSub?`<span class="k">Report</span><span class="v">${esc(j.reportSub)}</span>`:""}
         ${j.emberDate||j.emberType?`<span class="k">Ember</span><span class="v">${esc([j.emberType,j.emberDate].filter(Boolean).join(" · "))}</span>`:""}
         ${j.retest?`<span class="k">Retest</span><span class="v">${esc(j.retest)}${j.retestInv?(" · inv "+esc(j.retestInv)):""}</span>`:""}
@@ -515,6 +543,12 @@ function openDrawer(q){
     ${j.link?`<div class="dsec"><a class="cbtn" href="${esc(j.link)}" target="_blank" rel="noopener">↗ Open original quote</a></div>`:""}`;
   $("drawer").classList.add("open"); $("scrim").classList.add("open");
   $("dClose").onclick=closeDrawer;
+  const repBtn=$("dRep");
+  if(repBtn) repBtn.onclick=async()=>{
+    const sent=!j.reportSent; repBtn.disabled=true;
+    try{ await markReportSent(j,sent); render(); openDrawer(j.quote); toast(sent?"Report marked sent to client":"Report unmarked"); }
+    catch(e){ toast("Couldn't save — "+(e.message||e),"err"); console.error(e); repBtn.disabled=false; }
+  };
 }
 function closeDrawer(){$("drawer").classList.remove("open");$("scrim").classList.remove("open");}
 $("scrim").onclick=closeDrawer;
@@ -545,7 +579,7 @@ function initGoogle(){
   if(!window.google||!google.accounts){ showGate("Could not reach Google. Check your connection and reload."); return; }
   tokenClient=google.accounts.oauth2.initTokenClient({
     client_id:CONFIG.CLIENT_ID,
-    scope:"openid email profile https://www.googleapis.com/auth/spreadsheets.readonly",
+    scope:"openid email profile https://www.googleapis.com/auth/spreadsheets",
     callback:async(resp)=>{
       if(resp.error){ showGate("Sign-in was cancelled."); return; }
       token=resp.access_token;
