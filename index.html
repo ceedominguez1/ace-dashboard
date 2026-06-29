@@ -358,13 +358,13 @@ const STAGES=["Accepted","Scheduled","Completed","Invoiced","Paid"];
 
 /* ======================= SAVED VIEWS ======================= */
 const VIEWS=[
-  {key:"needs",   label:"Needs action", test:j=>!isClosed(j)},
-  {key:"overdue", label:"Overdue invoices", test:j=>isOverdue(j)},
-  {key:"awaiting",label:"Awaiting payment", test:j=>inv(j)==="sent"},
-  {key:"reportdue",label:"Report due to client", test:reportDue},
-  {key:"invoice", label:"Ready to invoice", test:j=>st(j)==="completed" && notInvoiced(j)},
+  {key:"needs",   label:"Needs action", test:j=>!isClosed(j)},                                       // overview
   {key:"schedule",label:"To schedule", test:j=>(st(j)==="unconfirmed"||st(j)==="missed"||st(j)==="") && notInvoiced(j) && (j.wix||"").toLowerCase()!=="deleted"},
   {key:"progress",label:"In progress", test:j=>st(j)==="confirmed"||st(j)==="in progress"},
+  {key:"reportdue",label:"Report due to client", test:reportDue},
+  {key:"invoice", label:"Ready to invoice", test:j=>st(j)==="completed" && notInvoiced(j)},
+  {key:"awaiting",label:"Awaiting payment", test:j=>inv(j)==="sent"},
+  {key:"overdue", label:"Overdue invoices", test:j=>isOverdue(j)},
   {key:"retest",  label:"Retest / repair", test:j=>retestActive(j)},
   {key:"closed",  label:"Paid · closed", test:j=>isClosed(j)},
   {key:"all",     label:"All", test:j=>true}
