@@ -30,7 +30,16 @@
 const CONFIG = {
   CLIENT_ID:    "974411831257-7ov5s0e5lvh5g4tetovdnl45iojibaa2.apps.googleusercontent.com",
   SHEET_ID:     "1cxqn3ZHlIA6CaSHa73C_dCJdFFqd2Pm7uEKiU8n_lnQ",
-  ACCEPTED_TAB: "Accepted"   // resolved at runtime; case-insensitive, with fallback
+  ACCEPTED_TAB: "Accepted",  // resolved at runtime; case-insensitive, with fallback
+  // "Report sent" stamp name by login email (overrides the Google profile name).
+  NAMES: {
+    "schedule@acefirela.com":        "Paola",
+    "schedule.acefirela@gmail.com":  "Johnny",
+    "support@acefirela.com":         "Support",
+    "info@acefirela.com":            "Ernesto",
+    "sofiamata.acefirela@gmail.com": "Sofia",
+    "djkato86@gmail.com":            "Carlos"
+  }
 };
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -605,7 +614,8 @@ function initGoogle(){
       token=resp.access_token;
       try{
         const info=await(await fetch("https://www.googleapis.com/oauth2/v3/userinfo",{headers:{Authorization:"Bearer "+token}})).json();
-        const firstName=info.given_name||String(info.name||"").trim().split(/\s+/)[0]||String(info.email||"").split("@")[0];
+        const email=(info.email||"").toLowerCase();
+        const firstName=(CONFIG.NAMES&&CONFIG.NAMES[email])||info.given_name||String(info.name||"").trim().split(/\s+/)[0]||email.split("@")[0];
         setUser({name:info.name||info.email,email:info.email,firstName});
         await loadLive(); hideGate(); render(); toast("Loaded · "+jobs.length+" jobs");
       }catch(e){ showGate("Couldn't load the sheet:\n"+(e.message||e)+"\n\nMake sure your account has access to the \"Wix quotes\" sheet."); console.error(e); }
