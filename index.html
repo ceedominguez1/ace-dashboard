@@ -258,7 +258,6 @@ const CONFIG = {
           <th>Stage</th>
           <th>Invoice</th>
           <th>Report to client</th>
-          <th></th>
         </tr></thead>
         <tbody id="queueBody"></tbody>
       </table>
@@ -511,7 +510,6 @@ function renderQueue(){
       <td><span class="pill ${stagePill(j)}"><span class="pd"></span>${esc(stageOf(j))}</span></td>
       <td>${invPill(j)}${j.invNum?` <span class="na-sub">#${esc(j.invNum)}</span>`:""}</td>
       <td>${reportPill(j)}</td>
-      <td><div class="rowact"><button class="btn btn-light btn-sm" data-open="${esc(j.quote)}">Open</button></div></td>
     </tr>`;
   }).join("");
   $("queueBody").querySelectorAll("tr").forEach(tr=>tr.onclick=()=>openDrawer(tr.dataset.q));
