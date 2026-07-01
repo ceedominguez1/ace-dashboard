@@ -180,7 +180,8 @@ const CONFIG = {
   .note{font-size:13px;color:var(--text);background:#FAFBFC;border:1px solid var(--hair);border-radius:8px;padding:10px 12px;white-space:pre-wrap}
 
   .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:11px 18px;border-radius:9px;font-size:13.5px;font-weight:500;box-shadow:0 12px 30px -10px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:all .22s;z-index:60;display:flex;align-items:center;gap:9px}
-  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)} .toast .tk{width:8px;height:8px;border-radius:50%;background:var(--green)} .toast.err .tk{background:var(--signal)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)} .toast .tk{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none} .toast.err .tk{background:var(--signal)}
+  .toast #toastMsg{max-width:min(560px,90vw);white-space:pre-wrap;word-break:break-word}
 
   .gate{position:fixed;inset:0;background:var(--ink);display:grid;place-items:center;z-index:50;text-align:center;padding:24px}
   .gate-card{max-width:420px}
@@ -189,7 +190,28 @@ const CONFIG = {
   .gate p{color:#9AA3B2;margin:0 0 22px;font-size:14px}
   .gate.hidden{display:none}        /* compound selector: hides the gate element itself */
 
+  .lastup{font-size:11px;color:#9AA3B2;font-family:"Saira Condensed",sans-serif;font-weight:600;letter-spacing:.05em;white-space:nowrap}
+
   @media (max-width:980px){.gauges{grid-template-columns:repeat(2,1fr)}.user-meta{display:none}}
+
+  /* Mobile: restack the work-queue table into labeled cards instead of a wide horizontal scroll. */
+  @media (max-width:720px){
+    .wrap{padding:14px 12px 48px}
+    .gauges{grid-template-columns:repeat(2,1fr);gap:10px}
+    .controls{gap:8px} .search{min-width:0;flex:1 1 100%}
+    .tablewrap{overflow-x:visible}
+    #queueTable{min-width:0}
+    #queueTable thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}  /* hide header row */
+    #queueTable tbody tr{display:block;border:1px solid var(--hair);border-radius:var(--radius);margin:0 0 10px;background:#fff;box-shadow:var(--shadow)}
+    #queueTable tbody tr:last-child{margin-bottom:0}
+    #queueTable tbody td{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 14px;border-bottom:1px solid #EEF1F4}
+    #queueTable tbody td:last-child{border-bottom:0}
+    #queueTable tbody td::before{content:attr(data-label);font-family:"Saira Condensed",sans-serif;font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:11px;color:var(--muted);flex:none}
+    #queueTable tbody td[data-label="Next action"]{display:block;background:#FAFBFC;border-bottom:1px solid var(--hair)}
+    #queueTable tbody td[data-label="Next action"]::before{display:none}
+    .svc{max-width:none;justify-content:flex-end;text-align:right}
+    .board{grid-template-columns:repeat(5,minmax(160px,80%))}
+  }
 </style>
 </head>
 <body>
@@ -217,6 +239,7 @@ const CONFIG = {
     </div>
     <div class="topbar-spacer"></div>
     <span class="roflag" title="Reads your sheet; the only thing it ever writes is the Report Sent status">Live</span>
+    <span class="lastup" id="lastUpdated" style="margin-left:4px" title="When the board last loaded from the sheet"></span>
     <button class="btn btn-ghost btn-sm" id="refreshBtn" style="margin-left:4px">Refresh</button>
     <div class="user" id="userBox" style="display:none">
       <div class="user-meta"><span class="n" id="uName">—</span><span class="e" id="uEmail">—</span></div>
@@ -281,9 +304,14 @@ let jobs=[];
 let resolvedTab=CONFIG.ACCEPTED_TAB;
 let reportSentCol=-1, reportSentExists=false;   // resolved at load; the only column the app writes
 let activeView="needs", search="", mainView="queue";
+let lastLoaded=null;   // timestamp of the last successful sheet load
+let saving=false;      // guards the report-sent write so clicks can't overlap
 
 const $=(id)=>document.getElementById(id);
-const esc=(s)=>(s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// Escapes &<>"' so sheet values can never break out of text nodes or double-quoted attributes.
+const esc=(s)=>(s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// Only allow http(s) links through; blocks javascript:/data: and other script-bearing schemes from the sheet.
+const safeUrl=(u)=>{ const s=String(u==null?"":u).trim(); return /^https?:\/\//i.test(s)?s:""; };
 const initials=(s)=>(s||"?").split(/[ @.,]/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("");
 
 /* ======================= COLUMN MAP (Accepted tab) ======================= */
@@ -441,6 +469,7 @@ async function loadLive(){
     out.push(j);
   }
   jobs=out;
+  lastLoaded=new Date();                           // stamp the successful load for the "Updated …" label
 }
 /* --- the ONLY writes the app makes: the Report Sent column --- */
 function colA1(i){ let s=""; i+=1; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
@@ -504,12 +533,12 @@ function renderQueue(){
     const na=nextAction(j);
     const sitebits=[j.site||"", "#"+j.quote].filter(Boolean).join(" · ");
     return `<tr data-q="${esc(j.quote)}">
-      <td><div class="na"><span class="na-act ${na.k}"><span class="nd"></span>${esc(na.a)}</span>
+      <td data-label="Next action"><div class="na"><span class="na-act ${na.k}"><span class="nd"></span>${esc(na.a)}</span>
         <span class="na-sub"><b>${esc(j.client||"—")}</b>${sitebits?(" · "+esc(sitebits)):""}</span></div></td>
-      <td><span class="svc"><span class="ic"></span>${esc(j.system||j.service||"—")}</span></td>
-      <td><span class="pill ${stagePill(j)}"><span class="pd"></span>${esc(stageOf(j))}</span></td>
-      <td>${invPill(j)}${j.invNum?` <span class="na-sub">#${esc(j.invNum)}</span>`:""}</td>
-      <td>${reportPill(j)}</td>
+      <td data-label="System"><span class="svc"><span class="ic"></span>${esc(j.system||j.service||"—")}</span></td>
+      <td data-label="Stage"><span class="pill ${stagePill(j)}"><span class="pd"></span>${esc(stageOf(j))}</span></td>
+      <td data-label="Invoice">${invPill(j)}${j.invNum?` <span class="na-sub">#${esc(j.invNum)}</span>`:""}</td>
+      <td data-label="Report">${reportPill(j)}</td>
     </tr>`;
   }).join("");
   $("queueBody").querySelectorAll("tr").forEach(tr=>tr.onclick=()=>openDrawer(tr.dataset.q));
@@ -567,24 +596,37 @@ function openDrawer(q){
       </div>
     </div>
     ${j.notes?`<div class="dsec"><div class="lbl">Notes</div><div class="note">${esc(j.notes)}</div></div>`:""}
-    ${j.link?`<div class="dsec"><a class="cbtn" href="${esc(j.link)}" target="_blank" rel="noopener">↗ Open original quote</a></div>`:""}`;
+    ${safeUrl(j.link)?`<div class="dsec"><a class="cbtn" href="${esc(safeUrl(j.link))}" target="_blank" rel="noopener">↗ Open original quote</a></div>`:""}`;
   $("drawer").classList.add("open"); $("scrim").classList.add("open");
   $("dClose").onclick=closeDrawer;
   const repBtn=$("dRep");
   if(repBtn) repBtn.onclick=async()=>{
-    const sent=!j.reportSent; repBtn.disabled=true;
-    try{ await markReportSent(j,sent); render(); openDrawer(j.quote); toast(sent?"Report marked sent to client":"Report unmarked"); }
-    catch(e){ toast("Couldn't save — "+(e.message||e),"err"); console.error(e); repBtn.disabled=false; }
+    if(saving) return;                                   // one write at a time
+    if(!token){ toast("Session expired — sign in again","err"); showGate("Session expired. Sign in again."); return; }
+    const sent=!j.reportSent;
+    if(!sent && !confirm("Clear the “report sent” stamp for this job?")) return;   // confirm the destructive undo
+    saving=true; repBtn.disabled=true; const prevLabel=repBtn.textContent; repBtn.textContent="Saving…";
+    try{
+      await markReportSent(j,sent);
+      render(); openDrawer(j.quote);                     // re-render reflects the saved value
+      toast(sent?"Saved · report marked sent to client":"Saved · report stamp cleared");
+    }catch(e){
+      // j.reportSent is only mutated on success, so the UI still shows the pre-save state — just restore the button.
+      repBtn.disabled=false; repBtn.textContent=prevLabel;
+      toast("Couldn't save — "+(e.message||e),"err"); console.error(e);
+    }finally{ saving=false; }
   };
 }
 function closeDrawer(){$("drawer").classList.remove("open");$("scrim").classList.remove("open");}
 $("scrim").onclick=closeDrawer;
 
+function fmtClock(d){ let h=d.getHours(); const m=String(d.getMinutes()).padStart(2,"0"); const ap=h>=12?"PM":"AM"; h=h%12||12; return h+":"+m+" "+ap; }
+function updateLastUpdated(){ const el=$("lastUpdated"); if(el) el.textContent=lastLoaded?("Updated "+fmtClock(lastLoaded)):""; }
 function render(){
   $("queuePanel").style.display=mainView==="queue"?"block":"none";
   $("views").style.display=mainView==="queue"?"flex":"none";
   $("boardPanel").style.display=mainView==="board"?"block":"none";
-  renderGauges(); renderViews();
+  renderGauges(); renderViews(); updateLastUpdated();
   if(mainView==="queue")renderQueue(); else renderBoard();
 }
 function setView(k){ activeView=k; if(mainView!=="queue"){mainView="queue";syncSeg();} render(); }
@@ -593,8 +635,13 @@ function syncSeg(){[...$("viewSeg").children].forEach(b=>b.classList.toggle("on"
 /* ======================= EVENTS ======================= */
 $("viewSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;mainView=b.dataset.view;syncSeg();render();});
 $("searchInput").addEventListener("input",e=>{search=e.target.value.trim();render();});
-$("refreshBtn").onclick=async()=>{ try{await loadLive();render();toast("Refreshed · "+jobs.length+" jobs");}catch(e){toast("Refresh failed","err");console.error(e);} };
-let toastT; function toast(m,kind){$("toastMsg").textContent=m;const el=$("toast");el.classList.toggle("err",kind==="err");el.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),2400);}
+$("refreshBtn").onclick=async()=>{
+  const btn=$("refreshBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Refreshing…";
+  try{ await loadLive(); render(); toast("Refreshed · "+jobs.length+" jobs"); }
+  catch(e){ toast("Refresh failed — "+(e.message||e),"err"); console.error(e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+};
+let toastT; function toast(m,kind){$("toastMsg").textContent=m;const el=$("toast");el.classList.toggle("err",kind==="err");el.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),kind==="err"?6000:2400);}
 
 /* ======================= AUTH + BOOT ======================= */
 function showGate(msg){ $("gate").classList.remove("hidden"); if(msg)$("gateMsg").textContent=msg; }
